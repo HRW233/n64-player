@@ -1,0 +1,11 @@
+# Cartridge images, in every order. Nothing in this project distributes one,
+# and a stray .z64 in a commit is the one mistake that cannot be undone.
+*.z64
+*.n64
+*.v64
+*.rom
+
+# Build output
+n64info
+build/
+*.o
