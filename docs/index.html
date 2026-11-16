@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>n64-player — an N64 emulator core built from its plan</title>
+<meta name="description" content="An N64 emulator core in portable C11: R4300i integer core, COP1 FPU, TLB translation and PI DMA, verified against 92 synthetic instruction-stream checks. Ships no ROM, key or bootcode.">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <p class="kicker">
+      <span class="dots" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      clean-room · portable C11 · <span class="mono">-lm</span> and nothing else
+    </p>
+    <h1>n64<span class="slash">/</span>player</h1>
+    <p class="lede">
+      An N64 emulator started from a written milestone plan instead of a blank
+      <span class="mono">cpu.c</span>. The integer core, FPU, TLB and PI DMA are
+      in and measured. It cannot boot your cartridge yet, and this page says so
+      instead of showing a screenshot.
+    </p>
+    <p class="links">
+      <a href="https://github.com/HRW233/n64-player">source on GitHub</a>
+      <a href="https://github.com/HRW233/n64-player/blob/main/docs/emulator-plan.md">milestone plan</a>
+    </p>
+  </div>
+</header>
+
+<section class="wrap status" aria-label="Build status">
+  <div class="figures">
+    <p class="figure"><span class="n" id="checks">92</span><span class="l">checks</span></p>
+    <p class="figure"><span class="n ok" id="fails">0</span><span class="l">failures</span></p>
+    <p class="figure"><span class="n">M1</span><span class="l">current milestone</span></p>
+  </div>
+  <p class="caveat">
+    Those numbers come from <span class="mono">make test</span> on a build with
+    <span class="mono">-Wall -Wextra</span> clean. Every check drives the CPU with
+    a hand-encoded instruction stream. None of them use a cartridge.
+  </p>
+</section>
+
+<section class="wrap" aria-labelledby="works">
+  <h2 id="works"><span class="idx">01</span> What actually runs</h2>
+  <div class="table" role="table">
+    <div class="row head" role="row">
+      <span role="columnheader">unit</span>
+      <span role="columnheader">where</span>
+      <span role="columnheader">proven by</span>
+    </div>
+    <div class="row" role="row">
+      <span role="cell" class="unit">Bus, RDRAM, cart window</span>
+      <span role="cell" class="mono">src/bus.c</span>
+      <span role="cell">big-endian stores, kseg0/kseg1 aliasing</span>
+    </div>
+    <div class="row" role="row">
+      <span role="cell" class="unit">ROM loader</span>
+      <span role="cell" class="mono">src/rom.c</span>
+      <span role="cell">z64 / v64 / n64 byte orders normalise to one image</span>
+    </div>
+    <div class="row" role="row">
+      <span role="cell" class="unit">R4300i integer core</span>
+      <span role="cell" class="mono">src/cpu.c</span>
+      <span role="cell">delay slots, signed vs unsigned, <span class="mono">add</span> overflow → ExcCode 12</span>
+    </div>
+    <div class="row" role="row">
+      <span role="cell" class="unit">COP1 FPU</span>
+      <span role="cell" class="mono">src/cpu.c</span>
+      <span role="cell">double round-trip, all 16 compares, <span class="mono">bc1t</span> through its delay slot</span>
+    </div>
+    <div class="row" role="row">
+      <span role="cell" class="unit">TLB and translation</span>
+      <span role="cell" class="mono">src/cpu.c</span>
+      <span role="cell"><span class="mono">TLBWI</span> maps a page; a miss takes the refill vector</span>
+    </div>
+    <div class="row" role="row">
+      <span role="cell" class="unit">PI registers and DMA</span>
+      <span role="cell" class="mono">src/bus.c</span>
+      <span role="cell"><span class="mono">PI_WR_LEN</span> copies cart bytes into RDRAM</span>
+    </div>
+    <div class="row" role="row">
+      <span role="cell" class="unit">Exceptions</span>
+      <span role="cell" class="mono">src/cpu.c</span>
+      <span role="cell">BEV/EXL vectors, <span class="mono">EPC</span>, <span class="mono">ERET</span> per EXL/ERL</span>
+    </div>
+    <div class="row" role="row">
+      <span role="cell" class="unit">Disassembler</span>
+      <span role="cell" class="mono">src/cpu.c</span>
+      <span role="cell">trace output, <span class="mono">--trace</span> on the CLI</span>
+    </div>
+  </div>
+</section>
+
+<section class="wrap" aria-labelledby="cant">
+  <h2 id="cant"><span class="idx">02</span> What it cannot do</h2>
+  <div class="blocked">
+    <p class="tag">blocked on input that must not be in this repository</p>
+    <ul>
+      <li>
+        <strong>The PIF / IPL1 boot ROM.</strong> Nintendo's, and not shippable.
+        <span class="mono">0x1FC00000</span> reads as zero here, so a commercial
+        cart stops before its first instruction. No amount of CPU accuracy
+        changes that.
+      </li>
+      <li>
+        <strong>The CIC variants' bootcode.</strong> IPL3 lives in the cart, but
+        the 6105 variant is encrypted and each CIC checks a different CRC. The
+        algorithm is implementable; the key material is not something to include.
+      </li>
+      <li>
+        <strong>RSP, RDP, audio, controller.</strong> Milestones M2 onwards. No
+        display list has ever reached a rasterizer in this tree, because nothing
+        emits one yet.
+      </li>
+    </ul>
+    <p class="small">
+      If a page like this showed a running Zelda title, it would be distributing
+      someone else's game. The plan in
+      <a href="https://github.com/HRW233/n64-player/blob/main/docs/emulator-plan.md">emulator-plan.md</a>
+      is written around that constraint: verification uses your own dump and
+      recorded expectations, or nothing.
+    </p>
+  </div>
+</section>
+
+<section class="wrap" aria-labelledby="build">
+  <h2 id="build"><span class="idx">03</span> Build and run</h2>
+  <p class="small">
+    Needs a C11 compiler and a shell. No submodules, no generated tables, no
+    third-party code.
+  </p>
+<pre class="code"><code><span class="c">$</span> git clone https://github.com/HRW233/n64-player
+<span class="c">$</span> cd n64-player &amp;&amp; make
+cc -std=c11 -O2 -Wall -Wextra -Isrc -o n64info \
+   src/bus.c src/cpu.c src/rom.c src/main.c -lm
+
+<span class="c">$</span> make test
+...
+<span class="ok">92 checks, 0 failures</span>
+
+<span class="c">$</span> ./n64info --help
+  --dump              print the ROM header
+  --run N             execute at most N instructions
+  --trace             print each instruction while running
+  --regs              print the register file at the end</code></pre>
+  <p class="small">
+    <span class="mono">n64info</span> will tell you, in its own usage text, that
+    the CIC handshake and boot ROM are absent. That is the honest output, not a
+    bug report waiting to happen.
+  </p>
+</section>
+
+<section class="wrap" aria-labelledby="plan">
+  <h2 id="plan"><span class="idx">04</span> The plan it is being built against</h2>
+  <ol class="milestones">
+    <li class="done"><span class="m">M0</span><span class="d">Bus, RDRAM, ROM loader, integer core, exceptions, test harness.</span></li>
+    <li class="part"><span class="m">M1</span><span class="d">Boot to RDRAM. FPU, TLB, PI DMA and vectors are done; the boot step is blocked on hardware Nintendo owns.</span></li>
+    <li><span class="m">M2</span><span class="d">RSP scalar core and <span class="mono">OSTask</span> dispatch, through the <span class="mono">D_ENDDL</span> handoff.</span></li>
+    <li><span class="m">M3</span><span class="d">RDP rasterizer, texture pipeline, table-driven combine modes, VI scanout, first frame.</span></li>
+    <li><span class="m">M4</span><span class="d">Frame-hash regression, versioned save states, determinism.</span></li>
+    <li><span class="m">M5</span><span class="d">Block translation cache, RSP fast paths — only after correctness, only with measurements.</span></li>
+  </ol>
+</section>
+
+<section class="wrap" aria-labelledby="simpl">
+  <h2 id="simpl"><span class="idx">05</span> Simplifications, written down</h2>
+  <ul class="plain">
+    <li><strong>4 KiB pages only.</strong> No page-mask pairs, no ASID comparison in the TLB lookup.</li>
+    <li><strong>PI DMA completes synchronously.</strong> The cart-domain latency is not modelled.</li>
+    <li><strong><span class="mono">Count</span> counts instructions</strong>, not cycles at 93.75 MHz. Audio pitch and VI pacing will need the real thing.</li>
+    <li><strong>Only the compare bit of FCR31.</strong> There is no FPU exception model yet.</li>
+    <li><strong>Halting instead of guessing.</strong> COP2, <span class="mono">LDL/LDR/SDL/SDR</span> and LL/SC reservations stop with a named reason rather than approximating silently.</li>
+  </ul>
+</section>
+
+<footer class="wrap foot">
+  <p>
+    No ROMs, no keys, no bootcode — <span class="mono">.gitignore</span>d by
+    policy, and no test in the tree touches copyrighted data.
+  </p>
+  <p class="small mono">
+    <a href="https://github.com/HRW233/n64-player">HRW233/n64-player</a> ·
+    MIT-style intent, no licence file added yet until you pick one
+  </p>
+</footer>
+
+</body>
+</html>
