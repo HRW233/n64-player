@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>n64-player — an N64 emulator core built from its plan</title>
-<meta name="description" content="An N64 emulator core in portable C11: R4300i integer core, COP1 FPU, TLB translation and PI DMA, verified against 92 synthetic instruction-stream checks. Ships no ROM, key or bootcode.">
+<meta name="description" content="An N64 emulator core in portable C11: R4300i integer core, COP1 FPU, TLB translation, PI DMA, the RSP scalar core and OS task dispatch, verified against 150 synthetic instruction-stream checks. Ships no ROM, key or bootcode.">
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
@@ -18,9 +18,9 @@
     <h1>n64<span class="slash">/</span>player</h1>
     <p class="lede">
       An N64 emulator started from a written milestone plan instead of a blank
-      <span class="mono">cpu.c</span>. The integer core, FPU, TLB and PI DMA are
-      in and measured. It cannot boot your cartridge yet, and this page says so
-      instead of showing a screenshot.
+      <span class="mono">cpu.c</span>. The integer core, FPU, TLB, PI DMA, the
+      RSP scalar core and task dispatch are in and measured. No frame has been
+      rasterized yet, and this page says so instead of showing a screenshot.
     </p>
     <p class="links">
       <a href="https://github.com/HRW233/n64-player">source on GitHub</a>
@@ -31,14 +31,15 @@
 
 <section class="wrap status" aria-label="Build status">
   <div class="figures">
-    <p class="figure"><span class="n" id="checks">92</span><span class="l">checks</span></p>
+    <p class="figure"><span class="n" id="checks">150</span><span class="l">checks</span></p>
     <p class="figure"><span class="n ok" id="fails">0</span><span class="l">failures</span></p>
-    <p class="figure"><span class="n">M1</span><span class="l">current milestone</span></p>
+    <p class="figure"><span class="n">M2</span><span class="l">current milestone</span></p>
   </div>
   <p class="caveat">
     Those numbers come from <span class="mono">make test</span> on a build with
-    <span class="mono">-Wall -Wextra</span> clean. Every check drives the CPU with
-    a hand-encoded instruction stream. None of them use a cartridge.
+    <span class="mono">-Wall -Wextra</span> clean: 92 CPU/FPU/TLB checks, 36 for
+    SP DMA, the RSP and task dispatch, and 22 for the boot path, which is driven
+    by a synthetic cartridge built inside the test itself.
   </p>
 </section>
 
@@ -86,6 +87,26 @@
       <span role="cell">BEV/EXL vectors, <span class="mono">EPC</span>, <span class="mono">ERET</span> per EXL/ERL</span>
     </div>
     <div class="row" role="row">
+      <span role="cell" class="unit">SP DMA</span>
+      <span role="cell" class="mono">src/bus.c</span>
+      <span role="cell">RD_LEN and WR_LEN move bytes between RDRAM and IMEM/DMEM</span>
+    </div>
+    <div class="row" role="row">
+      <span role="cell" class="unit">RSP scalar core</span>
+      <span role="cell" class="mono">src/rsp.c</span>
+      <span role="cell">32-bit MIPS, no delay slots; vector ops halt by name</span>
+    </div>
+    <div class="row" role="row">
+      <span role="cell" class="unit">Task dispatch</span>
+      <span role="cell" class="mono">src/rsp.c</span>
+      <span role="cell">ucode DMA'd to IMEM, run to its break, list checked in DMEM</span>
+    </div>
+    <div class="row" role="row">
+      <span role="cell" class="unit">Boot path</span>
+      <span role="cell" class="mono">src/boot.c</span>
+      <span role="cell">cart IPL3 from DMEM drives PI DMA and jumps to entry</span>
+    </div>
+    <div class="row" role="row">
       <span role="cell" class="unit">Disassembler</span>
       <span role="cell" class="mono">src/cpu.c</span>
       <span role="cell">trace output, <span class="mono">--trace</span> on the CLI</span>
@@ -110,9 +131,11 @@
         algorithm is implementable; the key material is not something to include.
       </li>
       <li>
-        <strong>RSP, RDP, audio, controller.</strong> Milestones M2 onwards. No
-        display list has ever reached a rasterizer in this tree, because nothing
-        emits one yet.
+        <strong>The RDP, the VI, audio and the controller.</strong> Milestone M3
+        onwards. Display lists do now appear — a synthetic task builds one in
+        DMEM and DMAs it to RDRAM — but nothing rasterizes them yet, and the
+        RSP's vector unit does not exist, so real ucode stops at its first
+        <span class="mono">vmov</span>.
       </li>
     </ul>
     <p class="small">
@@ -133,22 +156,31 @@
   </p>
 <pre class="code"><code><span class="c">$</span> git clone https://github.com/HRW233/n64-player
 <span class="c">$</span> cd n64-player &amp;&amp; make
-cc -std=c11 -O2 -Wall -Wextra -Isrc -o n64info \
-   src/bus.c src/cpu.c src/rom.c src/main.c -lm
+<span class="c">$</span> ./n64player your-dump.z64
+file           your-dump.z64
+entry          80000400
+title          "..."
+CIC            6102
+boot           cart IPL3 at DMEM 0xA4000040
+               PIF seed block is zeroed: IPL1 is not in this tree
+
+entry point    0x80000400 after 41204 instructions
+stopped        unimplemented opcode 0x4a (COP2 vector)
 
 <span class="c">$</span> make test
-...
-<span class="ok">92 checks, 0 failures</span>
+<span class="ok">150 checks, 0 failures</span>
 
-<span class="c">$</span> ./n64info --help
-  --dump              print the ROM header
-  --run N             execute at most N instructions
+<span class="c">$</span> ./n64player --help
+  --dump              print the ROM header and exit
+  --skip-ipl3         start at the entry point instead of running IPL3
+  --run N             execute at most N instructions (default 1000000)
   --trace             print each instruction while running
   --regs              print the register file at the end</code></pre>
   <p class="small">
-    <span class="mono">n64info</span> will tell you, in its own usage text, that
-    the CIC handshake and boot ROM are absent. That is the honest output, not a
-    bug report waiting to happen.
+    <span class="mono">n64player</span> prints the CIC it identified, the boot
+    path it took, whether the entry point was reached and what stopped it. When
+    it says the seed block is zeroed, that is the missing IPL1 and not a bug
+    report waiting to happen.
   </p>
 </section>
 
@@ -157,7 +189,7 @@ cc -std=c11 -O2 -Wall -Wextra -Isrc -o n64info \
   <ol class="milestones">
     <li class="done"><span class="m">M0</span><span class="d">Bus, RDRAM, ROM loader, integer core, exceptions, test harness.</span></li>
     <li class="part"><span class="m">M1</span><span class="d">Boot to RDRAM. FPU, TLB, PI DMA and vectors are done; the boot step is blocked on hardware Nintendo owns.</span></li>
-    <li><span class="m">M2</span><span class="d">RSP scalar core and <span class="mono">OSTask</span> dispatch, through the <span class="mono">D_ENDDL</span> handoff.</span></li>
+    <li class="done"><span class="m">M2</span><span class="d">RSP scalar core and <span class="mono">OSTask</span> dispatch: ucode DMA'd to IMEM, run to its break, display list checked in DMEM. Vector ops land with the RDP.</span></li>
     <li><span class="m">M3</span><span class="d">RDP rasterizer, texture pipeline, table-driven combine modes, VI scanout, first frame.</span></li>
     <li><span class="m">M4</span><span class="d">Frame-hash regression, versioned save states, determinism.</span></li>
     <li><span class="m">M5</span><span class="d">Block translation cache, RSP fast paths — only after correctness, only with measurements.</span></li>
