@@ -5,9 +5,9 @@ own console and run it. Written down before the code because the failure mode of
 this kind of project is a CPU core that passes its unit tests and cannot boot
 anything, followed by months of guessing which of the seven subsystems is wrong.
 
-**Status: M0 is implemented and tested; the testable half of M1 is too.** The boot
-step of M1 is blocked on the boot ROM and the CIC variants, neither of which this
-tree ships. M2 onwards are not started.
+**Status: M0, M1 and M2 are implemented and tested** — 150 checks across three
+binaries, 0 failures. M1's exit criterion is still blocked on the boot ROM and
+the CIC seed, neither of which this tree ships. M3 onwards are not started.
 
 ## What M0 is (in this tree)
 
@@ -20,7 +20,13 @@ tree ships. M2 onwards are not started.
 | COP1: single/double arithmetic, converts, compares, BC1F/T | `src/cpu.c` (`fpu_arith`) | done |
 | TLB: TLBWI/TLBWR/TLBP/TLBR, 4 KiB translation, refill vector | `src/cpu.c` (`translate`, `op_cop0`) | done |
 | PI registers and a synchronous DMA | `src/bus.c` (`bus_pi_write`) | done |
+| SP registers, IMEM/DMEM, DMA both ways | `src/bus.c` (`bus_sp_write`) | done |
+| RSP scalar core, 32-bit, no delay slots | `src/rsp.c` | done |
+| `OSTask` load and dispatch | `src/rsp.c` (`ostask_run`) | done |
+| Boot path: the cart's IPL3 from DMEM, or `--skip-ipl3` | `src/boot.c` | done |
 | Instruction-stream test suite (no ROM needed) | `tests/test_cpu.c` | done |
+| SP/RSP/task test suite | `tests/test_rsp.c` | done |
+| Boot-path test with a synthetic cart | `tests/test_boot.c` | done |
 
 Exit criteria met: `make test` passes; branches execute their delay slots; 32-bit
 results sign-extend; RDRAM stores are big-endian; `lwl`/`lwr` and `swl`/`swr`
@@ -35,8 +41,9 @@ that `lw` then reads through, an unmapped kuseg load takes the refill vector at
 `0x80000000` with `ExcCode` 2, and `Count` advances once per instruction.
 
 Still halting with a named reason, rather than guessing: COP2 (RSP),
-`LDL`/`LDR`/`SDL`/`SDR`, LL/SC reservations. The IPL3 step in `src/main.c` is an
-approximation, not a boot.
+`LDL`/`LDR`/`SDL`/`SDR`, LL/SC reservations. The boot path runs the cart's own
+IPL3 out of DMEM; what it cannot supply is IPL1 and the CIC seed block, so a cart
+that checks its seed stops there and says so.
 
 Known simplifications written down so they are not mistaken for accuracy:
 4 KiB pages only (no page-mask pairs), no ASID comparison, synchronous PI
@@ -63,9 +70,10 @@ not contain:
   bootcode CRC they check and in how their bootcode is encrypted, so CIC
   identification (from `crc1`/`crc2` in the header) has to select the right path.
   The algorithm is implementable; the key material is not ours to include.
-- **IPL3 itself.** Running the 4 KiB bootcode from the cart through the CPU
-  instead of approximating the copy, including its checksum write-back to
-  `0x80000318`. `src/main.c` currently approximates it.
+- **IPL3 itself.** Done in M2: the cart's bootcode is copied into DMEM where
+  IPL1 would have put it and executes there, driving PI DMA for real. Its
+  checksum write-back to `0x80000318` and its seed check remain unverified
+  without a cartridge, and the seed cannot pass with IPL1 absent.
 - **A real `Count`.** A cycle counter at 93.75 MHz, not one per instruction.
 
 Verification: the bootcode's own progress is the test. A ROM that reaches its
@@ -78,6 +86,21 @@ entry point prints through its own debug path; no ROM-specific hacks.
 - The DP command list handoff (`D_ENDDL`), so RDP work reaches M3.
 - First test: a known task produces a known display list in DMEM, checked by
   diffing against a recorded expectation rather than "it didn't crash".
+
+Done: the scalar core (integer ALU, multiplies, loads/stores, branches, `break`
+with no delay slots), SP DMA in both directions, the SP register block including
+`SP_PC` and the halt/broke bits, and `ostask_run` — ucode to IMEM, ucode_data to
+DMEM 0x800, data to DMEM 0, run until the ucode breaks.
+
+Still open in M2, and honestly listed rather than implied by the word "done":
+
+- **COP2 vector instructions.** The scalar half of the RSP runs ucode; the vector
+  unit does not exist, so any real gfx or audio ucode stops at its first `vmov`.
+  That is the largest remaining piece of the RSP and it belongs with M3.
+- **The `D_ENDDL` handoff.** A task's display list now lands in RDRAM, but nothing
+  consumes it: the RDP is M3.
+- **Interrupts.** `SP_STATUS` interrupt bits are stored; no interrupt is ever
+  raised, because there is no scheduler until M4.
 
 ## M3 — RDP and first frame
 
