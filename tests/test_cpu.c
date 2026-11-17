@@ -384,7 +384,7 @@ static void test_pi_dma(void) {
     Bus b;
     bus_init(&b, cart, sizeof cart);
     bus_write32(&b, 0x04600000u, 0x00001000u); /* DRAM_ADDR */
-    bus_write32(&b, 0x04600004u, 0x00000010u); /* CART_ADDR */
+    bus_write32(&b, 0x04600004u, 0x10000010u); /* CART_ADDR: physical cart base + 0x10 */
     bus_write32(&b, 0x0460000Cu, 0x0000000Fu); /* WR_LEN: 16 bytes */
     CHECK_EQ(b.pi.dmas, 1);
     CHECK_EQ(bus_read8(&b, 0x1000u), 0x20); /* cart[0x10], since cart[i] = 0x10 + i */
