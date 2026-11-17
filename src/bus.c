@@ -51,11 +51,11 @@ uint8_t bus_read8(const Bus *b, uint32_t a) {
         return rdram_byte(b, a);
     if (b->cart && in_window(a, 0x10000000u, b->cart_size)) return b->cart[a - 0x10000000u];
     if (in_window(a, 0x04600000u, 0x40u)) return (uint8_t)(bus_pi_read(b, a - 0x04600000u) >> (8 * (3 - (a & 3))));
+    if (in_window(a, 0xBFC00000u, 0x800u)) return 0;    /* IPL3 area: the bootcode itself is not shipped */
     if (in_window(a, 0x04000000u, 0x1000u)) return b->sp.dmem[a - 0x04000000u];
     if (in_window(a, 0x04001000u, 0x1000u)) return b->sp.imem[a - 0x04001000u];
     if (in_window(a, 0x04040000u, 0x20u)) return (uint8_t)(bus_sp_read(b, a - 0x04040000u) >> (8 * (3 - (a & 3))));
     if (in_window(a, 0x04080000u, 4u)) return (uint8_t)(b->sp.pc >> (8 * (3 - (a & 3))));
-    if (in_window(a, 0xBFC00000u, 0x800u)) return 0;    /* IPL3 area: the bootcode itself is not shipped */
     if (in_window(a, 0x04400000u, 0x40u)) return 0;     /* VI registers */
     if (in_window(a, 0x04800000u, 0x40u)) return 0;     /* SI registers */
     if (in_window(a, 0x1FC00000u, 0x80000u)) return 0;  /* PIF ROM: needs the boot ROM (not shipped) */
