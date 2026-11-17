@@ -1,9 +1,12 @@
-/* main.c — n64info: inspect a cart, optionally run its first instructions.
+/* main.c — n64player: point it at a cartridge and it boots it.
  *
- * This is the M0 harness. It deliberately does NOT claim to boot a game: the
- * IPL3 step here is an approximation (copy 1 MiB from ROM offset 0x1000 to
- * 0x80000400, then jump to the header entry point). Real bootcode needs the CIC
- * handshake and PI DMA, which is milestone M1.
+ *   ./n64player your-dump.z64
+ *
+ * It runs the cart's own IPL3 out of DMEM, reports where execution got to, and
+ * stops with a named reason rather than a silent freeze. What it cannot supply
+ * is IPL1 (the PIF ROM) and the CIC seed block it writes, so a cart that checks
+ * its seed will not get through; --skip-ipl3 bypasses the boot path entirely and
+ * starts at the header entry point.
  */
 #include "n64.h"
 
@@ -11,14 +14,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define DEFAULT_STEPS 1000000ull
+
 static void usage(const char *argv0) {
-    printf("usage: %s <rom.n64|rom.z64|rom.v64> [options]\n\n", argv0);
+    printf("usage: %s <rom.z64|rom.n64|rom.v64> [options]\n\n", argv0);
     printf("  --dump              print the parsed header and exit\n");
-    printf("  --run N             execute at most N instructions after the IPL3 approximation\n");
-    printf("  --trace             print each instruction while running (implies --run if unset)\n");
+    printf("  --skip-ipl3         start at the header entry point instead of running IPL3\n");
+    printf("  --run N             execute at most N instructions (default %llu)\n",
+           (unsigned long long)DEFAULT_STEPS);
+    printf("  --trace             print each instruction while running\n");
     printf("  --regs              print the register file at the end\n\n");
-    printf("Scope: integer core, COP1 FPU, TLB, PI DMA. The CIC handshake and the boot\n");
-    printf("ROM are not shipped, so a commercial ROM stops before its first instruction.\n");
+    printf("The CPU, FPU, TLB, PI DMA, SP DMA and the RSP scalar core all work.\n");
+    printf("IPL1 and the CIC seed block are not in this tree, so the boot path can\n");
+    printf("reach the entry point but cannot pass a cart's own seed check.\n");
 }
 
 static void dump_regs(const Cpu *c) {
@@ -29,34 +37,44 @@ static void dump_regs(const Cpu *c) {
     for (int i = 0; i < 32; i += 2)
         printf("  %-3s %016llx   %-3s %016llx\n", n[i], (unsigned long long)c->gpr[i], n[i + 1],
                (unsigned long long)c->gpr[i + 1]);
-    printf("  pc %08x  hi %016llx  lo %016llx\n", c->pc, (unsigned long long)c->hi, (unsigned long long)c->lo);
+    printf("  pc %08x  hi %016llx  lo %016llx\n", c->pc, (unsigned long long)c->hi,
+           (unsigned long long)c->lo);
     printf("  status %08x  cause %08x  epc %08x\n", c->cop0[12], c->cop0[13], c->cop0[14]);
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) {
-        usage(argv[0]);
-        return 2;
-    }
-    const char *path = argv[1];
-    long run = 0;
-    int trace = 0, regs = 0;
+    const char *path = NULL;
+    uint64_t limit = DEFAULT_STEPS;
+    int trace = 0, regs = 0, dump = 0, skip_ipl3 = 0;
 
-    for (int i = 2; i < argc; i++) {
+    for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--run") && i + 1 < argc) {
-            run = strtol(argv[++i], NULL, 0);
+            limit = strtoull(argv[++i], NULL, 0);
         } else if (!strcmp(argv[i], "--trace")) {
             trace = 1;
-            if (!run) run = 1000;
         } else if (!strcmp(argv[i], "--regs")) {
             regs = 1;
         } else if (!strcmp(argv[i], "--dump")) {
-            run = 0;
-        } else {
+            dump = 1;
+        } else if (!strcmp(argv[i], "--skip-ipl3")) {
+            skip_ipl3 = 1;
+        } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+            usage(argv[0]);
+            return 0;
+        } else if (argv[i][0] == '-') {
             fprintf(stderr, "unknown option %s\n", argv[i]);
             usage(argv[0]);
             return 2;
+        } else if (!path) {
+            path = argv[i];
+        } else {
+            fprintf(stderr, "more than one ROM given\n");
+            return 2;
         }
+    }
+    if (!path) {
+        usage(argv[0]);
+        return 2;
     }
 
     Rom rom;
@@ -72,42 +90,73 @@ int main(int argc, char **argv) {
     printf("%-14s %08x\n", "entry", rom.entry);
     printf("%-14s \"%s\"\n", "title", rom.title);
     printf("%-14s %08x %08x\n", "bootcode CRC", rom.crc1, rom.crc2);
-    printf("%-14s %c (%s)\n", "region", rom.region, rom.region == 'E' ? "PAL" : rom.region == 'J' ? "NTSC-J" : rom.region == 'P' ? "NTSC-U" : "unset");
 
-    if (run <= 0) {
+    if (dump) {
         rom_free(&rom);
         return 0;
     }
 
     Bus bus;
-    bus_init(&bus, rom.data, rom.size);
-
-    /* IPL3 approximation: the real bootcode copies 1 MiB from 0x1000 to 0x80000400. */
-    if (rom.size > 0x1000) {
-        uint32_t n = rom.size - 0x1000;
-        if (n > 0x100000u) n = 0x100000u;
-        memcpy(bus.rdram + 0x400, rom.data + 0x1000, n);
+    Cpu cpu;
+    BootInfo boot;
+    int rc = boot_cart(&bus, &cpu, &rom, skip_ipl3, &boot);
+    if (rc != 0 && !skip_ipl3) {
+        fprintf(stderr, "error: %s is too small to contain IPL3 (0xFC0 bytes at 0x40)\n", path);
+        rom_free(&rom);
+        return 1;
+    }
+    if (rc != 0) {
+        fprintf(stderr, "error: cannot set up the boot path\n");
+        rom_free(&rom);
+        return 1;
     }
 
-    Cpu cpu;
-    cpu_reset(&cpu, rom.entry);
+    printf("%-14s %s\n", "CIC",
+           boot.cic ? boot.cic : "unrecognised (header CRCs match no known variant)");
+    if (boot.ran_ipl3) {
+        printf("%-14s %s\n", "boot", "cart IPL3 at DMEM 0xA4000040");
+        printf("%-14s %s\n", "", "PIF seed block (DMEM 0x00-0x3F) zeroed: IPL1 is not here");
+    } else {
+        printf("%-14s %s\n", "boot", "entry point preloaded (--skip-ipl3)");
+    }
 
-    long i;
-    for (i = 0; i < run; i++) {
+    uint64_t i;
+    int reached = 0;
+    uint64_t reached_at = 0;
+    for (i = 0; i < limit; i++) {
+        if (!reached && cpu.pc == rom.entry) {
+            reached = 1;
+            reached_at = i;
+        }
         if (trace) {
-            uint32_t ins = bus_read32(&bus, cpu.pc);
+            uint32_t ins = bus_read32(&bus, cpu.pc & 0x1FFFFFFFu);
             char text[64];
             cpu_describe(cpu.pc, ins, text, sizeof text);
-            printf("%08llx  %08x  %s\n", (unsigned long long)(cpu.steps), ins, text);
+            printf("%08llx  %08x  %s\n", (unsigned long long)cpu.steps, ins, text);
         }
         if (!cpu_step(&cpu, &bus)) break;
     }
-    printf("\nran %ld instructions, %llu steps total\n", i, (unsigned long long)cpu.steps);
-    if (cpu.halted) printf("halted: %s\n", cpu.halt_reason);
+    if (!reached && cpu.pc == rom.entry) {
+        reached = 1;
+        reached_at = cpu.steps;
+    }
+
+    printf("\n");
+    printf("%-14s %llu\n", "ran", (unsigned long long)cpu.steps);
+    if (reached)
+        printf("%-14s 0x%08x after %llu instructions\n", "entry point", rom.entry,
+               (unsigned long long)reached_at);
+    else
+        printf("%-14s not reached\n", "entry point");
+    printf("%-14s %s\n", "stopped", cpu.halted ? cpu.halt_reason : "step limit reached");
+    if (boot.ran_ipl3 && !reached)
+        printf("%-14s %s\n", "", "IPL3 did not get through: see the seed note above");
     if (bus.unmapped_reads || bus.unmapped_writes)
-        printf("unmapped: %llu reads, %llu writes\n", (unsigned long long)bus.unmapped_reads,
-               (unsigned long long)bus.unmapped_writes);
-    if (regs || cpu.halted) dump_regs(&cpu);
+        printf("%-14s %llu reads, %llu writes\n", "unmapped",
+               (unsigned long long)bus.unmapped_reads, (unsigned long long)bus.unmapped_writes);
+    printf("%-14s %llu IPI", "devices", (unsigned long long)bus.pi.dmas);
+    printf("  %llu SP\n", (unsigned long long)bus.sp.dmas);
+    if (regs) dump_regs(&cpu);
 
     rom_free(&rom);
     return 0;
